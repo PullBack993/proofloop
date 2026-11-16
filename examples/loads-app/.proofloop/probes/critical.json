@@ -1,0 +1,41 @@
+[
+  {
+    "id": "journey.assign-load",
+    "kind": "api",
+    "method": "POST",
+    "path": "/api/loads/L-1002/assign",
+    "body": { "driverId": "D-2" },
+    "role": "dispatcher",
+    "fixture": "default",
+    "mutates": true,
+    "coverageLimit": "one open load, one driver with enough capacity"
+  },
+  {
+    "id": "journey.assign-overweight",
+    "kind": "api",
+    "method": "POST",
+    "path": "/api/loads/L-1006/assign",
+    "body": { "driverId": "D-1" },
+    "role": "dispatcher",
+    "fixture": "default",
+    "mutates": true,
+    "coverageLimit": "one overweight combination"
+  },
+  {
+    "id": "journey.assign-as-viewer",
+    "kind": "api",
+    "method": "POST",
+    "path": "/api/loads/L-1001/assign",
+    "body": { "driverId": "D-3" },
+    "role": "viewer",
+    "fixture": "default",
+    "mutates": true,
+    "coverageLimit": "negative authorization for the viewer role only"
+  },
+  {
+    "id": "db.loads-by-status",
+    "kind": "db",
+    "sqlite": "data/app.db",
+    "query": "SELECT status, COUNT(*) AS n FROM loads GROUP BY status ORDER BY status"
+  }
+]

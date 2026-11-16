@@ -1,0 +1,6 @@
+{
+  "name": "proofloop",
+  "version": "0.1.0",
+  "description": "ProofLoop in-session harness: blocks edits to the contract, tests and hook settings, runs fast checks after edits, and refuses the stop until baseline verification passes. Requires the proofloop CLI on PATH (npm link).",
+  "author": { "name": "ProofLoop" }
+}

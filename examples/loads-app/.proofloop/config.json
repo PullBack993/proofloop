@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "project": "loads-app",
+  "app": {
+    "reset": "node scripts/reset-db.mjs",
+    "start": "node src/server.mjs",
+    "baseUrl": "http://127.0.0.1:4317",
+    "healthPath": "/health",
+    "startTimeoutMs": 20000,
+    "env": { "PORT": "4317" },
+    "clock": { "mode": "frozen", "time": "2026-01-15T09:00:00.000Z" },
+    "timezone": "UTC",
+    "locale": "en_US.UTF-8"
+  },
+  "fixtures": { "files": ["fixtures/seed.json"] },
+  "roles": {
+    "dispatcher": { "headers": { "x-role": "dispatcher" } },
+    "viewer": { "headers": {} }
+  },
+  "defaultRole": "viewer",
+  "params": { "id": "L-1003" },
+  "inventory": { "sources": ["src"] },
+  "tests": { "command": "node --test --test-reporter=tap", "format": "tap" },
+  "browser": { "enabled": true, "viewport": { "width": 1024, "height": 700 }, "visualThreshold": 0.001 },
+  "flakeReruns": 2,
+  "fastChecks": [{ "name": "syntax", "command": "node --check src/server.mjs && node --check src/loads.mjs" }],
+  "protectedPaths": ["test/**", "fixtures/**"],
+  "harness": { "maxStopRounds": 3 },
+  "limits": { "falseAlarmsPerCleanRun": 0, "setupMinutes": 30, "runMinutes": 5 },
+  "connections": [
+    { "name": "driver notification e-mail", "level": "none", "note": "no sandbox exists; not exercised by any probe" }
+  ]
+}

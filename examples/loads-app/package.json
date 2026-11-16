@@ -1,0 +1,12 @@
+{
+  "name": "loads-app",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Demo load-assignment service used by ProofLoop Experiment 001 (smoke test only).",
+  "scripts": {
+    "reset": "node scripts/reset-db.mjs",
+    "start": "node src/server.mjs",
+    "test": "node --test"
+  }
+}

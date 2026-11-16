@@ -1,0 +1,29 @@
+{
+  "name": "proofloop",
+  "version": "0.1.0",
+  "description": "Baseline-first snapshot-and-verify CLI: shows what changed that nobody asked for, with a reproduction for every finding.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "private": true,
+  "bin": {
+    "proofloop": "dist/src/cli.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --no-warnings --test --test-reporter=spec \"dist/test/**/*.test.js\"",
+    "experiment:001": "npm run build && bash examples/experiment-001/run.sh"
+  },
+  "dependencies": {
+    "pixelmatch": "^7.2.0",
+    "playwright": "^1.65.1",
+    "pngjs": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/pngjs": "^6.0.5",
+    "typescript": "5.9"
+  }
+}

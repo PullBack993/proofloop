@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "objective": "Dispatchers assign open loads to drivers with enough capacity; the board shows every load.",
+  "requirements": [
+    {
+      "id": "R1",
+      "text": "A dispatcher can assign an open load to a driver with enough capacity",
+      "oracle": { "kind": "business-rule", "source": "dispatch handbook §2" },
+      "checks": [
+        { "type": "assert", "probe": "journey.assign-load", "path": "$.status", "op": "eq", "value": 200 },
+        { "type": "assert", "probe": "journey.assign-load", "path": "$.body.status", "op": "eq", "value": "assigned" }
+      ]
+    },
+    {
+      "id": "R2",
+      "text": "A load heavier than the driver's capacity cannot be assigned",
+      "oracle": { "kind": "business-rule", "source": "dispatch handbook §3" },
+      "checks": [{ "type": "assert", "probe": "journey.assign-overweight", "path": "$.status", "op": "eq", "value": 409 }]
+    },
+    {
+      "id": "R3",
+      "text": "Only dispatchers can assign loads",
+      "oracle": { "kind": "business-rule", "source": "roles matrix" },
+      "checks": [{ "type": "assert", "probe": "journey.assign-as-viewer", "path": "$.status", "op": "eq", "value": 403 }]
+    },
+    {
+      "id": "R4",
+      "text": "The capacity rule keeps its unit tests green",
+      "oracle": { "kind": "existing-contract", "source": "test/loads.test.mjs" },
+      "checks": [{ "type": "test", "name": "canAssign rejects overweight" }]
+    }
+  ],
+  "invariants": [
+    { "id": "I1", "text": "Every load has a positive weight", "probe": "gen.get.api.loads", "path": "$.body[*].weightKg", "op": "gt", "value": 0 },
+    { "id": "I2", "text": "Load ids are unique in the list", "probe": "gen.get.api.loads", "path": "$.body[*].id", "op": "unique" }
+  ],
+  "claims": [],
+  "unknowns": ["The driver notification e-mail after assignment is not probed"]
+}

@@ -1,0 +1,17 @@
+{
+  "drivers": [
+    { "id": "D-1", "name": "Driver One", "capacityKg": 3000 },
+    { "id": "D-2", "name": "Driver Two", "capacityKg": 8000 },
+    { "id": "D-3", "name": "Driver Three", "capacityKg": 24000 }
+  ],
+  "loads": [
+    { "id": "L-1001", "origin": "Vienna", "destination": "Graz", "weightKg": 1850, "status": "open", "createdAt": "2026-01-10T08:00:00.000Z" },
+    { "id": "L-1002", "origin": "Linz", "destination": "Salzburg", "weightKg": 6400, "status": "open", "createdAt": "2026-01-10T09:30:00.000Z" },
+    { "id": "L-1003", "origin": "Graz", "destination": "Klagenfurt", "weightKg": 12500, "status": "open", "createdAt": "2026-01-11T07:15:00.000Z" },
+    { "id": "L-1004", "origin": "Innsbruck", "destination": "Bregenz", "weightKg": 900, "status": "assigned", "driverId": "D-1", "createdAt": "2026-01-11T10:00:00.000Z", "assignedAt": "2026-01-11T11:00:00.000Z" },
+    { "id": "L-1005", "origin": "Vienna", "destination": "St. Pölten", "weightKg": 2300, "status": "open", "createdAt": "2026-01-12T06:45:00.000Z" },
+    { "id": "L-1006", "origin": "Salzburg", "destination": "Villach", "weightKg": 15800, "status": "open", "createdAt": "2026-01-12T12:20:00.000Z" },
+    { "id": "L-1007", "origin": "Wels", "destination": "Steyr", "weightKg": 4100, "status": "delivered", "driverId": "D-2", "createdAt": "2026-01-13T08:10:00.000Z", "assignedAt": "2026-01-13T09:00:00.000Z" },
+    { "id": "L-1008", "origin": "Dornbirn", "destination": "Feldkirch", "weightKg": 700, "status": "open", "createdAt": "2026-01-14T14:05:00.000Z" }
+  ]
+}
