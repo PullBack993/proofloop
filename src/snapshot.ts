@@ -1,6 +1,6 @@
 // Baseline recorder: starts the app cleanly in an isolated workspace, runs every probe and the
 // existing tests, and writes a manifest tied to the commit, environment and fixtures.
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ControlSet, EnvFingerprint, Manifest, Observation, Probe } from './types.js';
 import type { Store } from './store.js';
@@ -19,8 +19,15 @@ export interface CaptureOptions {
   log?: (msg: string) => void;
 }
 
+/** Hash of the fixture files; an entry may be a folder (every file in it, sorted). */
 function fileHash(dir: string, files: string[]): string | undefined {
-  const present = files.filter((f) => existsSync(join(dir, f)));
+  const expand = (f: string): string[] => {
+    const abs = join(dir, f);
+    if (!existsSync(abs)) return [];
+    if (!statSync(abs).isDirectory()) return [f];
+    return readdirSync(abs).sort().flatMap((x) => expand(join(f, x)));
+  };
+  const present = files.flatMap(expand);
   if (!present.length) return undefined;
   return sha256(present.map((f) => `${f}\n${sha256(readFileSync(join(dir, f)))}`).join('\n')).slice(0, 16);
 }
