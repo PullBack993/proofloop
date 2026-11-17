@@ -13,11 +13,28 @@ import { noiseReport, renderNoise } from './noise.js';
 import { buildInventory } from './inventory.js';
 import { harToProbes } from './har.js';
 import { approvePattern, attachCheck, builderRules, fixesAfterAccepted, listProposals, loadReport, proposeFalseAlarmRule, recordLesson, retireLesson } from './lessons.js';
-import { claudeHookSettings, installClaudeHooks, runClaudeHook } from './hooks.js';
+import { AGENTS, type Agent, codexHooksFile, hookSettings, installClaudeHooks, installCodexHooks, runHook, selfCommand } from './hooks.js';
+import { launchInteractive, runLoop } from './agent.js';
 import type { Config, Contract, Json, MissReason, Op, Rule } from './types.js';
-import { UserError, readJson, writeJson } from './util.js';
+import { UserError, exec, readJson, writeJson } from './util.js';
 
 const HELP = `proofloop — your agent says done; ProofLoop shows what changed that nobody asked for.
+
+In front of the agent (start here)
+  claude [OPTIONS] [-- CLAUDE ARGS]
+  codex  [OPTIONS] [-- CODEX ARGS]
+                               Freeze the control set, record the baseline at HEAD, then start the
+                               agent with ProofLoop's hooks: protected files are blocked, fast checks
+                               run after each edit, and every turn end is verified against the
+                               baseline (the agent is sent back while anything fails). When the
+                               agent exits, ProofLoop verifies outside the session: exit 0 ACCEPTED,
+                               1 REJECTED. Options: --allow-dirty, --no-final-verify, --agent-bin BIN,
+                               --trust-hooks (Codex: skip the one-time /hooks trust step)
+  run --agent claude|codex [--rounds N] [OPTIONS] "TASK" [-- AGENT ARGS]
+                               Headless loop: baseline → agent works on TASK → verify → findings go
+                               back to the same agent session → … until ACCEPTED or N rounds (default
+                               harness.maxStopRounds). Claude runs with --permission-mode acceptEdits
+                               and Codex with --full-auto unless you pass your own.
 
 Setup
   init                         Create .proofloop/ (config, contract, rules, probes)
@@ -54,11 +71,12 @@ Measure
   minutes add --minutes N --kind setup|false-alarm|review|correction|repair [--run RUN] [--note T]
   metrics                      Accepted/rejected counts, run time, human minutes
 
-Harness
-  hook claude EVENT            Hook entry point (reads the event JSON on stdin)
-  hooks print [--command CMD]  Print Claude Code hook settings
-  hooks install [--settings FILE] [--command CMD]
-                               Merge hooks into ~/.claude/settings.json (user level, not the repo)
+Harness (install the hooks permanently instead of launching through proofloop)
+  hook claude|codex EVENT      Hook entry point (reads the event JSON on stdin)
+  hooks print [--agent claude|codex] [--command CMD]
+  hooks install [--agent claude|codex] [--settings FILE] [--command CMD]
+                               Claude: merges into ~/.claude/settings.json (user level).
+                               Codex: writes <repo>/.codex/hooks.json; trust it once with /hooks.
 
 Global: --repo DIR (default: current Git repository)
 `;
@@ -81,7 +99,48 @@ function parseValue(v: string | undefined): Json | undefined {
 
 const log = (m: string) => process.stderr.write(m + '\n');
 
+/** `proofloop claude|codex|run …`: ProofLoop's own options, then `--` and the agent's. */
+async function launcher(cmd: string, argv: string[]): Promise<number> {
+  const cut = argv.indexOf('--');
+  const own = cut >= 0 ? argv.slice(0, cut) : argv;
+  const agentArgs = cut >= 0 ? argv.slice(cut + 1) : [];
+  const { values: o, positionals: pos } = parseArgs({
+    args: own,
+    allowPositionals: true,
+    options: {
+      repo: { type: 'string' },
+      agent: { type: 'string' },
+      'agent-bin': { type: 'string' },
+      'allow-dirty': { type: 'boolean' },
+      'no-final-verify': { type: 'boolean' },
+      'trust-hooks': { type: 'boolean' },
+      rounds: { type: 'string' },
+      task: { type: 'string' },
+    },
+  });
+  const agent = (cmd === 'run' ? (o.agent ?? 'claude') : cmd) as Agent;
+  if (!AGENTS.includes(agent)) throw new UserError(`Unknown agent "${agent}". Use claude or codex.`);
+  const root = repoRoot(o.repo ?? process.cwd());
+  const store = new Store(root);
+  try {
+    const base = { agent, agentArgs, agentBin: o['agent-bin'], allowDirty: o['allow-dirty'], finalVerify: !o['no-final-verify'], trustHooks: o['trust-hooks'], log };
+    if (cmd !== 'run') return await launchInteractive(store, root, base);
+    const task = o.task ?? pos.join(' ');
+    if (!task.trim()) throw new UserError('Usage: proofloop run --agent claude|codex [--rounds N] "TASK" [-- AGENT ARGS]');
+    const frozenRounds = loadFrozen(store)?.set.config.harness?.maxStopRounds;
+    const rounds = Number(o.rounds ?? frozenRounds ?? 3);
+    if (!Number.isInteger(rounds) || rounds < 1) throw new UserError('--rounds must be a positive integer');
+    const r = await runLoop(store, root, { ...base, task, rounds });
+    log(`\nProofLoop: ${r.decision} after ${r.rounds} round(s)${r.reason ? ` — ${r.reason}` : ''}.${r.sessionId ? ` Agent session: ${r.sessionId}` : ''}`);
+    if (r.runs.length) log(`Last report: ${store.path('runs', r.runs[r.runs.length - 1], 'report.md')}`);
+    return r.decision === 'ACCEPTED' ? 0 : r.decision === 'BLOCKED' ? 2 : 1;
+  } finally {
+    store.close();
+  }
+}
+
 async function main(argv: string[]): Promise<number> {
+  if (['claude', 'codex', 'run'].includes(argv[0] ?? '') && !argv.includes('--help') && !argv.includes('-h')) return launcher(argv[0], argv.slice(1));
   const { values: o, positionals: pos } = parseArgs({
     args: argv,
     allowPositionals: true,
@@ -116,6 +175,8 @@ async function main(argv: string[]): Promise<number> {
       'include-writes': { type: 'boolean' },
       prefix: { type: 'string' },
       lock: { type: 'string' },
+      agent: { type: 'string' },
+      launched: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -126,23 +187,33 @@ async function main(argv: string[]): Promise<number> {
   }
 
   if (cmd === 'hook') {
-    if (pos[1] !== 'claude') throw new UserError('Only the Claude Code adapter exists so far: proofloop hook claude <Event>');
-    await runClaudeHook(pos[2] ?? '', await readStdin());
+    const agent = pos[1] as Agent;
+    if (!AGENTS.includes(agent)) throw new UserError('Usage: proofloop hook claude|codex <Event>');
+    await runHook(agent, pos[2] ?? '', await readStdin(), { launched: o.launched });
     return 0;
   }
   if (cmd === 'hooks') {
-    const command = o.command ?? 'proofloop';
+    const agent = (o.agent ?? 'claude') as Agent;
+    if (!AGENTS.includes(agent)) throw new UserError('--agent must be claude or codex');
+    const onPath = (await exec('command -v proofloop', { cwd: process.cwd(), timeoutMs: 5000 })).code === 0;
+    const command = o.command ?? (pos[1] === 'install' && !onPath ? selfCommand() : 'proofloop');
     if (pos[1] === 'print' || !pos[1]) {
-      process.stdout.write(JSON.stringify(claudeHookSettings(command), null, 2) + '\n');
+      process.stdout.write(JSON.stringify(hookSettings(agent, command), null, 2) + '\n');
       return 0;
     }
     if (pos[1] === 'install') {
-      const file = o.settings ?? join(homedir(), '.claude', 'settings.json');
-      const r = installClaudeHooks(file, command);
-      log(`Hooks merged into ${r.file}${r.backup ? ` (backup: ${r.backup})` : ''}. They act only in repositories with ${CONTROL_DIR}/config.json.`);
+      if (agent === 'claude') {
+        const file = o.settings ?? join(homedir(), '.claude', 'settings.json');
+        const r = installClaudeHooks(file, command);
+        log(`Hooks merged into ${r.file}${r.backup ? ` (backup: ${r.backup})` : ''}. They act only in repositories with ${CONTROL_DIR}/config.json.`);
+      } else {
+        const file = o.settings ?? codexHooksFile(repoRoot(o.repo ?? process.cwd()));
+        const r = installCodexHooks(file, command);
+        log(`Codex hooks written to ${r.file}${r.backup ? ` (backup: ${r.backup})` : ''}. Open Codex in this repository and trust them once with /hooks.`);
+      }
       return 0;
     }
-    throw new UserError('Usage: proofloop hooks print|install');
+    throw new UserError('Usage: proofloop hooks print|install [--agent claude|codex]');
   }
 
   const root = repoRoot(o.repo ?? process.cwd());

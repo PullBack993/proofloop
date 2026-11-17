@@ -113,6 +113,15 @@ export function findWeakening(prev: ControlSet, next: ControlSet): string[] {
   if ((next.config.browser?.visualThreshold ?? 0.001) > (prev.config.browser?.visualThreshold ?? 0.001))
     w.push('browser.visualThreshold raised');
   if (prev.config.tests && !next.config.tests) w.push('existing test run removed');
+  else if (prev.config.tests && next.config.tests && prev.config.tests.command !== next.config.tests.command)
+    w.push(`test command changed (${prev.config.tests.command} -> ${next.config.tests.command}); check it still runs every test it ran before`);
+  // Fewer generated probes is weakening too: generation off, roles dropped, route parameters dropped.
+  if (prev.config.inventory?.generate !== false && next.config.inventory?.generate === false) w.push('probe generation turned off');
+  const nextRoles = new Set(next.config.inventory?.roles ?? []);
+  for (const r of prev.config.inventory?.roles ?? []) if (!nextRoles.has(r)) w.push(`generated probes no longer run as role ${r}`);
+  for (const route of Object.keys(prev.config.routeParams ?? {})) if (!next.config.routeParams?.[route]) w.push(`route parameters for ${route} removed`);
+  if (prev.config.browser?.enabled !== false && next.config.browser?.enabled === false) w.push('browser capture turned off');
+  if ((next.config.flakeReruns ?? 2) < (prev.config.flakeReruns ?? 2)) w.push('fewer flakiness re-runs');
   const nextFast = new Set((next.config.fastChecks ?? []).map((f) => f.name));
   for (const f of prev.config.fastChecks ?? []) if (!nextFast.has(f.name)) w.push(`fast check ${f.name} removed`);
   const prevLessons = byId(prev.lessons);

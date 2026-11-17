@@ -77,8 +77,14 @@ function patternRegex(pattern: string, allowPrefix: boolean): RegExp {
 
 /** Apply a transform to every node matching the pattern. Returns a new value. */
 export function transformAt(value: Json, pattern: string, fn: (v: Json) => Json | undefined): Json {
+  // A pattern ending in `**` applies at every depth below its prefix, not just at the first match.
+  const deep = pattern.endsWith('.**') || pattern.endsWith('[**]');
   const walk = (v: Json, p: string): Json | undefined => {
-    if (pathMatches(pattern, p, false)) return fn(v);
+    if (pathMatches(pattern, p, false)) {
+      const r = fn(v);
+      if (!deep || r === undefined || r === null || typeof r !== 'object') return r;
+      v = r;
+    }
     if (Array.isArray(v)) {
       const out: Json[] = [];
       v.forEach((x, i) => {

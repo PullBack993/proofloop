@@ -31,11 +31,14 @@ export function headCommit(root: string): string {
   }
 }
 
-/** Hash of uncommitted tracked + untracked changes (excluding .proofloop control files). */
+/** Control and agent-harness folders: not application behaviour, never counted as a change. */
+const NOT_APP = ['.', ':(exclude).proofloop', ':(exclude).codex', ':(exclude).claude'];
+
+/** Hash of uncommitted tracked + untracked changes (excluding control and harness files). */
 export function workingTreeState(root: string): { dirty: boolean; diffHash?: string } {
-  const status = git(root, ['status', '--porcelain', '--untracked-files=all', '--', '.', ':(exclude).proofloop']);
+  const status = git(root, ['status', '--porcelain', '--untracked-files=all', '--', ...NOT_APP]);
   if (!status) return { dirty: false };
-  const diff = git(root, ['diff', 'HEAD', '--', '.', ':(exclude).proofloop']);
+  const diff = git(root, ['diff', 'HEAD', '--', ...NOT_APP]);
   return { dirty: true, diffHash: sha256(status + '\n' + diff).slice(0, 16) };
 }
 

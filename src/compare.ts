@@ -142,8 +142,14 @@ export async function compare(
     push({ probeId: h.probeId, path: '$', change: 'added', after: h.ok ? 'new probe, no baseline' : `new probe failed: ${h.error}`, class: 'unknown', note: 'new route or probe: no baseline to compare; needs a contract check' });
   }
 
-  // Existing tests.
-  if (base.tests || head.tests) {
+  // Existing tests. A run that timed out or parsed no results is no evidence either way: its
+  // side of every test comparison is unknown, never an unintended change.
+  const noEvidence = (t: typeof base.tests) => !!t && (!!t.error || t.results.length === 0);
+  const blind = noEvidence(base.tests) ? 'baseline' : noEvidence(head.tests) ? 'head' : undefined;
+  if (blind) {
+    const t = blind === 'baseline' ? base.tests! : head.tests!;
+    push({ probeId: 'tests', path: '$', change: 'changed', before: blind === 'baseline' ? `${t.results.length} results` : `${base.tests?.results.length ?? 0} results`, after: blind === 'head' ? `${t.results.length} results` : `${head.tests?.results.length ?? 0} results`, class: 'unknown', note: `existing tests not compared: the ${blind} test run ${t.error ?? 'produced no parsed results'} (exit ${t.exitCode}); re-run to judge them` });
+  } else if (base.tests || head.tests) {
     const bt = new Map((base.tests?.results ?? []).map((r) => [r.name, r.ok]));
     const ht = new Map((head.tests?.results ?? []).map((r) => [r.name, r.ok]));
     for (const [name, ok] of bt) {

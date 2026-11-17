@@ -20,6 +20,7 @@ const KEPT_HEADERS = ['content-type', 'location', 'cache-control', 'access-contr
 export function roleHeaders(config: Config, role: string | undefined): Record<string, string> {
   const r = role ?? config.defaultRole;
   if (!r) return {};
+  if (r === 'anonymous' && !config.roles?.anonymous) return {};
   const def = config.roles?.[r];
   if (!def) return {};
   const out: Record<string, string> = {};
@@ -28,8 +29,14 @@ export function roleHeaders(config: Config, role: string | undefined): Record<st
   return out;
 }
 
+/** Route written as `/orders/:id`, whatever the source used (`[id]`, `{id}`). */
+export function routeKey(path: string): string {
+  return path.replace(/\[([A-Za-z_]\w*)\]|\{([A-Za-z_]\w*)\}/g, (_, a, b) => `:${a ?? b}`);
+}
+
 export function expandPath(path: string, config: Config): string {
-  return path.replace(/:([A-Za-z_]\w*)|\[([A-Za-z_]\w*)\]|\{([A-Za-z_]\w*)\}/g, (m, a, b, c) => config.params?.[a ?? b ?? c] ?? m);
+  const own = config.routeParams?.[routeKey(path.split('?')[0])];
+  return path.replace(/:([A-Za-z_]\w*)|\[([A-Za-z_]\w*)\]|\{([A-Za-z_]\w*)\}/g, (m, a, b, c) => own?.[a ?? b ?? c] ?? config.params?.[a ?? b ?? c] ?? m);
 }
 
 async function runApi(p: ApiProbe, ctx: ProbeContext): Promise<Omit<Observation, 'durationMs'>> {
@@ -187,12 +194,23 @@ export function parseTap(output: string): { name: string; ok: boolean }[] {
       stack[depth] = sub[2].trim();
       continue;
     }
-    const m = /^(\s*)(not ok|ok)\s+\d+\s*(?:-\s*)?(.*?)(\s+#\s*(SKIP|TODO).*)?$/i.exec(line);
+    const m = /^(\s*)(not ok|ok)\s+\d+\s*(?:-\s*)?(.*)$/i.exec(line);
     if (!m) continue;
-    if (m[5]) continue;
+    // TAP 14 (Vitest): a trailing "{" opens a block of child results; directives such as
+    // "# time=4.5ms" vary per run and are not part of the name.
+    let rest = m[3].trim();
+    const opens = /\s*\{$/.test(rest);
+    if (opens) rest = rest.replace(/\s*\{$/, '');
+    const directive = /\s+#\s*(\w+)\b.*$/.exec(rest);
+    if (directive) rest = rest.slice(0, directive.index).trim();
     const depth = m[1].length / 4;
+    if (opens) {
+      stack.length = depth;
+      stack[depth] = rest;
+    }
+    if (directive && /^(SKIP|TODO)$/i.test(directive[1])) continue;
     const parents = stack.slice(0, depth).filter(Boolean);
-    const name = [...parents, m[3].trim()].join(' > ');
+    const name = [...parents, rest].join(' > ');
     results.push({ name, ok: m[2].toLowerCase() === 'ok' });
   }
   return results;
@@ -201,14 +219,25 @@ export function parseTap(output: string): { name: string; ok: boolean }[] {
 export async function runTests(config: Config, workspace: string, store: Store, env: NodeJS.ProcessEnv): Promise<TestRun | undefined> {
   if (!config.tests) return undefined;
   const cwd = join(workspace, config.app.cwd ?? '.');
-  const r = await exec(config.tests.command, { cwd, env, timeoutMs: config.tests.timeoutMs ?? 10 * 60_000 });
-  const log = redactText(r.stdout + '\n' + r.stderr);
-  const results = config.tests.format === 'tap' ? parseTap(r.stdout) : [{ name: 'test command', ok: r.code === 0 }];
+  const tests = config.tests;
+  const once = async () => {
+    const r = await exec(tests.command, { cwd, env, timeoutMs: tests.timeoutMs ?? 10 * 60_000 });
+    const results = tests.format === 'tap' ? parseTap(r.stdout) : [{ name: 'test command', ok: r.code === 0 }];
+    return { r, results };
+  };
+  // A suite that hangs or prints nothing is retried once; a second failure is reported as such.
+  let { r, results } = await once();
+  let retried = '';
+  if (r.timedOut || (config.tests.format === 'tap' && results.length === 0)) {
+    retried = `first attempt ${r.timedOut ? 'timed out' : 'produced no results'}; retried once. `;
+    ({ r, results } = await once());
+  }
+  const log = redactText(retried + r.stdout + '\n' + r.stderr);
   return {
     command: config.tests.command,
     exitCode: r.code,
     results,
     logHash: store.putEvidence(log, 'log'),
-    error: r.timedOut ? 'test command timed out' : undefined,
+    error: r.timedOut ? 'test command timed out' + (retried ? ' twice' : '') : results.length === 0 && config.tests.format === 'tap' ? 'no test results parsed' : undefined,
   };
 }

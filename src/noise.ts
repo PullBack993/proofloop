@@ -55,11 +55,13 @@ export function noiseReport(store: Store, set: ControlSet, a: Manifest, b: Manif
       proposed.set(r.id, r);
     }
   }
+  // Verify flags a test that appears, disappears or flips, so noise must count all three.
   const at = new Map((a.tests?.results ?? []).map((t) => [t.name, t.ok]));
-  for (const t of b.tests?.results ?? [])
-    if (at.has(t.name) && at.get(t.name) !== t.ok) {
+  const bt = new Map((b.tests?.results ?? []).map((t) => [t.name, t.ok]));
+  for (const name of new Set([...at.keys(), ...bt.keys()]))
+    if (at.get(name) !== bt.get(name)) {
       falseAlarms++;
-      (byProbe.tests ??= []).push({ path: t.name, before: String(at.get(t.name)), after: String(t.ok) });
+      (byProbe.tests ??= []).push({ path: name, before: String(at.get(name) ?? '(absent)'), after: String(bt.get(name) ?? '(absent)') });
     }
   const limit = set.config.limits?.falseAlarmsPerCleanRun;
   // The noise profile marks varying fields as flaky in later verify runs; it never ignores them.

@@ -50,7 +50,11 @@ export interface Config {
   defaultRole?: string;
   /** Fixture values for route parameters, used by generated probes. */
   params?: Record<string, string>;
-  inventory?: { sources?: string[]; openapi?: string; pagesDirs?: string[]; exclude?: string[]; generate?: boolean };
+  /** Per-route fixture values, keyed by the route as `/orders/:id`; they win over `params`. */
+  routeParams?: Record<string, Record<string, string>>;
+  /** `roles`: generate each read probe once per role (`anonymous` = no credentials), so a
+   *  change in who may see what shows up as a difference. The first role keeps the plain id. */
+  inventory?: { sources?: string[]; openapi?: string; pagesDirs?: string[]; exclude?: string[]; generate?: boolean; roles?: string[] };
   tests?: { command: string; format: 'tap' | 'exit-code'; timeoutMs?: number };
   browser?: BrowserConfig;
   flakeReruns?: number;

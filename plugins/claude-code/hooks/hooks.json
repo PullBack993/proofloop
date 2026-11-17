@@ -1,5 +1,4 @@
 {
-  "description": "ProofLoop harness v0. Acts only in repositories that contain .proofloop/config.json.",
   "hooks": {
     "SessionStart": [
       {
@@ -53,7 +52,7 @@
           {
             "type": "command",
             "command": "proofloop hook claude Stop",
-            "timeout": 600
+            "timeout": 900
           }
         ]
       }

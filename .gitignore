@@ -2,3 +2,6 @@ node_modules/
 dist/
 *.log
 .DS_Store
+
+# Pilot results and kits describe private codebases; never publish them
+pilots/

@@ -1,7 +1,7 @@
 // Route and API inventory from router files, OpenAPI schemas and file-based page routing.
 // Probes generated from it cost nothing to maintain: they are regenerated on every snapshot.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { isAbsolute, join, relative, sep } from 'node:path';
 import type { ApiProbe, BrowserProbe, Config, InventoryReport, Probe, RouteEntry } from './types.js';
 import { expandPath } from './probes.js';
 import { readJson } from './util.js';
@@ -58,12 +58,14 @@ export function discoverRoutes(config: Config, workspace: string): RouteEntry[] 
       }
     }
   }
-  if (inv.openapi && existsSync(join(appDir, inv.openapi))) {
-    const spec = readJson<{ paths?: Record<string, Record<string, unknown>> }>(join(appDir, inv.openapi));
+  // An absolute spec path keeps the route list fixed across the commits being compared.
+  const specFile = inv.openapi ? (isAbsolute(inv.openapi) ? inv.openapi : join(appDir, inv.openapi)) : undefined;
+  if (specFile && existsSync(specFile)) {
+    const spec = readJson<{ paths?: Record<string, Record<string, unknown>> }>(specFile);
     for (const [path, ops] of Object.entries(spec.paths ?? {}))
       for (const method of Object.keys(ops))
         if (new RegExp(`^(${METHODS})$`, 'i').test(method))
-          add({ method: method.toUpperCase(), path: path.replace(/\{(\w+)\}/g, ':$1'), kind: 'api', file: inv.openapi });
+          add({ method: method.toUpperCase(), path: path.replace(/\{(\w+)\}/g, ':$1'), kind: 'api', file: inv.openapi! });
   }
   for (const pagesDir of inv.pagesDirs ?? []) {
     const base = join(appDir, pagesDir);
@@ -119,20 +121,25 @@ export function buildInventory(config: Config, workspace: string, existing: Prob
     let reason: string | undefined;
     if (!generate) reason = 'probe generation disabled';
     else if (route.method !== 'GET') reason = 'writes need a hand-written critical-journey probe (generated probes are read-only)';
-    else if (missing) reason = `no fixture value for ${missing[0]} in config.params`;
+    else if (missing) reason = `no fixture value for ${missing[0]} in config.routeParams or config.params`;
     else if (route.kind === 'page' && !browserOn) reason = 'browser capture disabled';
     if (reason) {
       unprobed.push({ route, reason });
       continue;
     }
-    const role = config.defaultRole;
-    const limit = `generated from ${route.file}${route.line ? ':' + route.line : ''}; GET only, role ${role ?? 'anonymous'}, default fixture, no interactions`;
-    const probe: ApiProbe | BrowserProbe =
-      route.kind === 'page'
-        ? { id: `gen.page.${slug(route.path)}`, kind: 'browser', path: route.path, source: 'generated', role, fixture: 'default', coverageLimit: limit, route: { method: 'GET', path: route.path } }
-        : { id: `gen.get.${slug(route.path)}`, kind: 'api', method: 'GET', path: route.path, source: 'generated', role, fixture: 'default', coverageLimit: limit, route: { method: 'GET', path: route.path } };
-    generated.push(probe);
-    probed.push({ route, probes: [probe.id] });
+    const roles: (string | undefined)[] = route.kind === 'api' && config.inventory?.roles?.length ? config.inventory.roles : [config.defaultRole];
+    const ids: string[] = [];
+    roles.forEach((role, i) => {
+      const suffix = i === 0 ? '' : `@${role}`;
+      const limit = `generated from ${route.file}${route.line ? ':' + route.line : ''}; GET only, role ${role ?? 'anonymous'}, default fixture, no interactions`;
+      const probe: ApiProbe | BrowserProbe =
+        route.kind === 'page'
+          ? { id: `gen.page.${slug(route.path)}${suffix}`, kind: 'browser', path: route.path, source: 'generated', role, fixture: 'default', coverageLimit: limit, route: { method: 'GET', path: route.path } }
+          : { id: `gen.get.${slug(route.path)}${suffix}`, kind: 'api', method: 'GET', path: route.path, source: 'generated', role, fixture: 'default', coverageLimit: limit, route: { method: 'GET', path: route.path } };
+      generated.push(probe);
+      ids.push(probe.id);
+    });
+    probed.push({ route, probes: ids });
   }
   return { generated, report: { routes, probed, unprobed } };
 }

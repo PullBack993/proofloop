@@ -67,6 +67,21 @@ function reproduction(d: Difference, probe: Probe | undefined, set: ControlSet, 
   return out;
 }
 
+/** A run in which most API probes got the very same error response did not exercise the app. */
+export function degenerateRun(m: Manifest, share = 0.8): string | undefined {
+  const api = m.observations.filter((o) => o.ok && o.value && typeof o.value === 'object' && 'status' in (o.value as object));
+  if (api.length < 10) return undefined;
+  const groups = new Map<string, number>();
+  for (const o of api) {
+    const v = o.value as { status?: number; body?: unknown };
+    if ((v.status ?? 0) < 400) continue;
+    const k = `${v.status} ${JSON.stringify(v.body ?? '').slice(0, 200)}`;
+    groups.set(k, (groups.get(k) ?? 0) + 1);
+  }
+  const [top, n] = [...groups.entries()].sort((a, b) => b[1] - a[1])[0] ?? ['', 0];
+  return n / api.length >= share ? `${n} of ${api.length} probes got the same error (${top.slice(0, 120)}), so the app was not exercised` : undefined;
+}
+
 export async function verify(
   store: Store,
   root: string,
@@ -105,6 +120,16 @@ export async function verify(
   store.db.prepare('UPDATE runs SET commit_sha = ? WHERE id = ?').run(head.commit, runId);
 
   const requirements = evaluateContract(control.set, head, base, cmp.differences);
+  // Identical walls of errors on both sides compare as "no difference"; that proves nothing.
+  for (const [side, m] of [['baseline', base], ['head', head]] as const) {
+    const wall = degenerateRun(m);
+    if (!wall) continue;
+    const r = requirements.find((x) => x.id === 'BASELINE');
+    if (r && r.status === 'VERIFIED') {
+      r.status = 'UNKNOWN';
+      r.outcomes.push({ check: 'baseline exercised the app', status: 'UNKNOWN', detail: `${side}: ${wall}` });
+    }
+  }
   const decision = decide(requirements);
 
   const inv = head.inventory;

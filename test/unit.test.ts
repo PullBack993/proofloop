@@ -9,7 +9,7 @@ import { redactJson, redactText } from '../src/redact.js';
 import { parseTap } from '../src/probes.js';
 import { applyOp, evaluateContract, decide } from '../src/contract.js';
 import { findWeakening, validateControl } from '../src/control.js';
-import { bashTouchesProtected, isProtectedPath } from '../src/hooks.js';
+import { bashTouchesProtected, hookSettings, isProtectedPath, patchFiles, runHook, toolTargets } from '../src/hooks.js';
 import { looksLikeCorrection } from '../src/lessons.js';
 import { matchClaim, envDrift } from '../src/compare.js';
 import { discoverRoutes, buildInventory } from '../src/inventory.js';
@@ -163,6 +163,13 @@ test('weakening needs a human: removed requirements, new ignore rules, retired l
   grown.lessons.push({ ...prev.lessons[0], id: 'L2' });
   grown.contract.requirements.push({ id: 'R2', text: 'more', oracle: { kind: 'business-rule' }, checks: [] });
   assert.deepEqual(findWeakening(prev, grown), [], 'adding checks is never weakening');
+  // Found while setting up a real repository: narrowing the test run went through unflagged.
+  const wide = structuredClone(prev);
+  wide.config = { ...wide.config, tests: { command: 'vitest run', format: 'tap' }, inventory: { roles: ['a', 'b'] }, routeParams: { '/x/:id': { id: '1' } } };
+  const narrow = structuredClone(wide);
+  narrow.config = { ...narrow.config, tests: { command: 'vitest run tests/unit', format: 'tap' }, inventory: { roles: ['a'] }, routeParams: {} };
+  const w2 = findWeakening(wide, narrow).join('\n');
+  for (const s of ['test command changed', 'no longer run as role b', 'route parameters for /x/:id removed']) assert.match(w2, new RegExp(s));
 });
 
 test('rules without owner or reason are rejected', () => {
@@ -182,6 +189,13 @@ test('harness protects control files, tests and hook settings', () => {
   assert.ok(bashTouchesProtected('npx proofloop freeze --approve-weakening', globs));
   assert.equal(bashTouchesProtected('cat .proofloop/contract.json', globs), undefined);
   assert.equal(bashTouchesProtected('npm run build', globs), undefined);
+  // Seen in a real Claude session: read-only, must not be blocked.
+  assert.equal(bashTouchesProtected(`git ls-files | grep -v '^.proofloop' | head -50; grep -rn "api/loads" . -l 2>/dev/null | head`, globs), undefined);
+  assert.equal(bashTouchesProtected('ls test/ 2>&1 | wc -l > /tmp/count', globs), undefined);
+  assert.ok(bashTouchesProtected('cat x | tee .proofloop/contract.json', globs));
+  assert.ok(bashTouchesProtected("sed -i '' 's/a/b/' test/loads.test.mjs", globs));
+  assert.ok(bashTouchesProtected('npm test >> test/out.log', globs));
+  assert.ok(bashTouchesProtected('cd src && cp a.js ../test/a.test.js', globs));
 });
 
 test('corrections are noticed in plain words (English and German)', () => {
@@ -205,4 +219,88 @@ test('inventory finds routes, generates read-only probes and reports gaps', () =
   const reasons = report.unprobed.map((u) => `${u.route.method} ${u.route.path}: ${u.reason}`).join('\n');
   assert.match(reasons, /POST \/api\/items: writes need a hand-written/);
   assert.match(reasons, /no fixture value for :orderId/);
+});
+
+test('Codex apply_patch edits are mapped to the files they touch', () => {
+  const patch = '*** Begin Patch\n*** Update File: src/a.ts\n@@\n-x\n+y\n*** Add File: test/new.test.ts\n+t\n*** Delete File: old.ts\n*** Update File: b.ts\n*** Move to: .proofloop/contract.json\n*** End Patch\n';
+  assert.deepEqual(patchFiles(patch), ['src/a.ts', 'test/new.test.ts', 'old.ts', 'b.ts', '.proofloop/contract.json']);
+  assert.deepEqual(toolTargets('apply_patch', { command: patch }).files.length, 5);
+  assert.equal(toolTargets('Bash', { command: 'ls' }).bash, 'ls');
+  assert.deepEqual(toolTargets('Edit', { file_path: '/x/y.ts' }).files, ['/x/y.ts']);
+});
+
+test('hook settings: Codex matches apply_patch, launched hooks carry the flag', () => {
+  const codex = hookSettings('codex', 'pl') as { hooks: Record<string, { matcher?: string; hooks: { command: string }[] }[]> };
+  assert.match(codex.hooks.PreToolUse[0].matcher!, /apply_patch/);
+  assert.equal(codex.hooks.Stop[0].hooks[0].command, 'pl hook codex Stop');
+  const claude = hookSettings('claude', 'pl', true) as { hooks: Record<string, { matcher?: string; hooks: { command: string }[] }[]> };
+  assert.equal(claude.hooks.Stop[0].hooks[0].command, 'pl hook claude Stop --launched');
+});
+
+test('Stop always answers with JSON (Codex requires it), even outside ProofLoop repos', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pl-stop-'));
+  const chunks: string[] = [];
+  const write = process.stdout.write.bind(process.stdout);
+  (process.stdout as unknown as { write: (c: string) => boolean }).write = (c: string) => (chunks.push(String(c)), true);
+  try {
+    await runHook('codex', 'Stop', JSON.stringify({ cwd: dir, session_id: 's' }));
+  } finally {
+    (process.stdout as unknown as { write: typeof write }).write = write;
+  }
+  assert.deepEqual(JSON.parse(chunks.join('')), {});
+});
+
+test('generated probes: one per role, per-route params win over global ones', async () => {
+  const { expandPath, roleHeaders } = await import('../src/probes.js');
+  const dir = mkdtempSync(join(tmpdir(), 'pl-inv-roles-'));
+  writeFileSync(join(dir, 'openapi.json'), JSON.stringify({ paths: { '/orders/{id}': { get: {} }, '/vehicles/{id}': { get: {} }, '/me': { get: {} } } }));
+  const config = {
+    version: 1, project: 'x', app: { start: 'x', baseUrl: 'http://127.0.0.1:1' },
+    roles: { carrier: { headers: { authorization: 'Bearer c' } }, shipper: { headers: { authorization: 'Bearer s' } } },
+    defaultRole: 'carrier', params: { id: 'GLOBAL' }, routeParams: { '/vehicles/:id': { id: 'V1' } },
+    inventory: { sources: [], openapi: 'openapi.json', roles: ['carrier', 'shipper', 'anonymous'] },
+  } as unknown as Config;
+  const { generated } = buildInventory(config, dir, []);
+  const ids = generated.map((p) => p.id).sort();
+  assert.deepEqual(ids, ['gen.get.me', 'gen.get.me@anonymous', 'gen.get.me@shipper', 'gen.get.orders.id', 'gen.get.orders.id@anonymous', 'gen.get.orders.id@shipper', 'gen.get.vehicles.id', 'gen.get.vehicles.id@anonymous', 'gen.get.vehicles.id@shipper']);
+  assert.equal(expandPath('/vehicles/:id', config), '/vehicles/V1');
+  assert.equal(expandPath('/orders/{id}', config), '/orders/GLOBAL');
+  assert.deepEqual(roleHeaders(config, 'anonymous'), {});
+  assert.deepEqual(roleHeaders(config, 'shipper'), { authorization: 'Bearer s' });
+});
+
+test('a mask on `$.body.**` reaches every depth', async () => {
+  const { normalize } = await import('../src/diff.js');
+  const rule = { id: 'm', version: 1, owner: 'o', reason: 'r', probe: '*', kind: 'mask', path: '$.body.**', pattern: '(?<![0-9a-f])(?!aaaa)[0-9a-f]{8}(?![0-9a-f])', replacement: '<new>' } as Rule;
+  const v = { body: { id: 'bbbb1234', keep: 'aaaa1234', list: [{ ref: 'sys_cccc5678' }], n: 3 } };
+  assert.deepEqual(normalize(v, [rule]), { body: { id: '<new>', keep: 'aaaa1234', list: [{ ref: 'sys_<new>' }], n: 3 } });
+});
+
+test('TAP 14 (Vitest): timing directives are not part of test names; blocks give parents', () => {
+  const run = (t1: string, t2: string) => [
+    `ok 1 - tests/unit/a.test.js # time=${t1}ms {`,
+    `    ok 1 - group # time=${t2}ms {`,
+    `        ok 1 - works # time=0.5ms`,
+    `        not ok 2 - fails # time=0.2ms`,
+    `        ok 3 - later # SKIP not now`,
+    `    }`,
+    `}`,
+  ].join('\n');
+  const a = parseTap(run('4.52', '0.92'));
+  assert.deepEqual(a, [
+    { name: 'tests/unit/a.test.js', ok: true },
+    { name: 'tests/unit/a.test.js > group', ok: true },
+    { name: 'tests/unit/a.test.js > group > works', ok: true },
+    { name: 'tests/unit/a.test.js > group > fails', ok: false },
+  ]);
+  assert.deepEqual(parseTap(run('9.1', '3.3')), a, 'another run with other timings gives the same names');
+});
+
+test('a run where most probes got the same error is flagged as not exercising the app', async () => {
+  const { degenerateRun } = await import('../src/verify.js');
+  const obs = (status: number, body: unknown) => ({ probeId: 'p', ok: true, value: { status, body }, evidence: {}, durationMs: 1 });
+  const wall = { observations: Array.from({ length: 20 }, () => obs(403, { message: 'CORS policy does not allow this origin' })) } as unknown as Manifest;
+  assert.match(degenerateRun(wall) ?? '', /20 of 20 probes got the same error/);
+  const healthy = { observations: [...Array.from({ length: 12 }, () => obs(200, { ok: 1 })), ...Array.from({ length: 8 }, () => obs(403, { e: 1 }))] } as unknown as Manifest;
+  assert.equal(degenerateRun(healthy), undefined);
 });
